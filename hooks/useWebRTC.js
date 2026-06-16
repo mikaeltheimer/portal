@@ -19,78 +19,102 @@ async function createCathedralReverb(audioContext) {
   return convolver;
 }
 
+function createHiddenAudioElement() {
+  const el = document.createElement('audio');
+  el.autoplay = true;
+  el.playsInline = true;
+  el.muted = false;
+  Object.assign(el.style, { position: 'absolute', width: '0', height: '0', opacity: '0' });
+  document.body.appendChild(el);
+  return el;
+}
+
+// localStreamRef is owned by the parent so Safari iOS can populate it
+// synchronously from a click handler before startCall is invoked.
 export function useWebRTC(socketRef, localStreamRef) {
   const peerRef = useRef(null);
   const audioContextRef = useRef(null);
-  const audioElementRef = useRef(null); // <audio> element for reliable playback
-  const localAudioElementRef = useRef(null); // <audio> element for self-monitoring
+  const convolverRef = useRef(null);
+  const remoteAudioElRef = useRef(null);
+  const remoteReverbElRef = useRef(null);
+  const localReverbElRef = useRef(null);
+  const localSelfMonitorRef = useRef({ enabled: true, gainNode: null });
   const iceCandidateQueue = useRef([]);
   const remoteDescSet = useRef(false);
 
   const setupAudioPipeline = useCallback(async (remoteStream) => {
     console.log('[audio] setting up pipeline');
 
-    // PRIMARY: attach stream to an <audio> element — the only reliable
-    // cross-browser / cross-device way to play WebRTC audio.
-    const audioEl = document.createElement('audio');
-    audioEl.srcObject = remoteStream;
-    audioEl.autoplay = true;
-    audioEl.playsInline = true;   // critical for iOS
-    audioEl.muted = false;
-    audioEl.volume = 1.0;
-    // Hide but keep in DOM — required for playback to work
-    audioEl.style.position = 'absolute';
-    audioEl.style.width = '0';
-    audioEl.style.height = '0';
-    audioEl.style.opacity = '0';
-    document.body.appendChild(audioEl);
-    audioElementRef.current = audioEl;
+    // Dry remote audio — primary playback via <audio> element
+    const remoteAudioEl = createHiddenAudioElement();
+    remoteAudioEl.srcObject = remoteStream;
+    remoteAudioEl.volume = 0.45;
+    remoteAudioElRef.current = remoteAudioEl;
+    remoteAudioEl.play().catch(e => console.warn('[audio] remote play() failed:', e));
+    console.log('[audio] remote <audio> attached');
 
-    audioEl.play().catch((e) => console.warn('[audio] play() failed:', e));
-    console.log('[audio] <audio> element attached and playing');
-
-    // SECONDARY: add reverb via Web Audio API on top
-    // We use a MediaStreamDestination to merge reverb back into a stream,
-    // then play it through a second audio element at lower volume.
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const audioContext = audioContextRef.current || new AudioCtx();
       audioContextRef.current = audioContext;
+      if (audioContext.state === 'suspended') await audioContext.resume();
 
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
+      // Shared convolver — used for both remote and local reverb
+      const convolver = await createCathedralReverb(audioContext);
+      convolverRef.current = convolver;
+
+      // ── Remote reverb ──
+      const remoteSource = audioContext.createMediaStreamSource(remoteStream);
+      const remoteReverbDest = audioContext.createMediaStreamDestination();
+      const remoteWetGain = audioContext.createGain();
+      remoteWetGain.gain.value = 0.55;
+      remoteSource.connect(convolver);
+      convolver.connect(remoteWetGain);
+      remoteWetGain.connect(remoteReverbDest);
+
+      const remoteReverbEl = createHiddenAudioElement();
+      remoteReverbEl.srcObject = remoteReverbDest.stream;
+      remoteReverbElRef.current = remoteReverbEl;
+      remoteReverbEl.play().catch(e => console.warn('[reverb] remote reverb play() failed:', e));
+
+      // ── Local reverb (self-monitoring) ──
+      if (localStreamRef.current) {
+        const localSource = audioContext.createMediaStreamSource(localStreamRef.current);
+        const localConvolver = await createCathedralReverb(audioContext);
+        const localReverbDest = audioContext.createMediaStreamDestination();
+
+        const localWetGain = audioContext.createGain();
+        localWetGain.gain.value = 0.4;
+        // Store gain node so toggle can mute/unmute without rebuilding pipeline
+        localSelfMonitorRef.current.gainNode = localWetGain;
+
+        localSource.connect(localConvolver);
+        localConvolver.connect(localWetGain);
+        localWetGain.connect(localReverbDest);
+
+        const localReverbEl = createHiddenAudioElement();
+        localReverbEl.srcObject = localReverbDest.stream;
+        localReverbElRef.current = localReverbEl;
+        localReverbEl.play().catch(e => console.warn('[reverb] local reverb play() failed:', e));
+        console.log('[audio] local self-monitoring with reverb started');
       }
 
-      const convolver = await createCathedralReverb(audioContext);
-      const source = audioContext.createMediaStreamSource(remoteStream);
-
-      // Route only the wet (reverb) signal to a separate audio element
-      const reverbDest = audioContext.createMediaStreamDestination();
-      const wetGain = audioContext.createGain();
-      wetGain.gain.value = 0.55;
-
-      source.connect(convolver);
-      convolver.connect(wetGain);
-      wetGain.connect(reverbDest);
-
-      // Lower the dry audio element volume so reverb is audible
-      audioEl.volume = 0.45;
-
-      const reverbEl = document.createElement('audio');
-      reverbEl.srcObject = reverbDest.stream;
-      reverbEl.autoplay = true;
-      reverbEl.playsInline = true;
-      reverbEl.muted = false;
-      reverbEl.style.position = 'absolute';
-      reverbEl.style.width = '0';
-      reverbEl.style.height = '0';
-      reverbEl.style.opacity = '0';
-      document.body.appendChild(reverbEl);
-      reverbEl.play().catch((e) => console.warn('[reverb] play() failed:', e));
-      console.log('[audio] reverb layer added');
+      console.log('[audio] pipeline ready');
     } catch (e) {
       console.warn('[audio] reverb setup failed, dry audio still playing:', e);
-      // Dry audio via the first element still works — reverb is a bonus
+    }
+  }, [localStreamRef]);
+
+  // Toggle self-monitoring on/off without rebuilding the pipeline
+  const setSelfMonitor = useCallback((enabled) => {
+    localSelfMonitorRef.current.enabled = enabled;
+    const gainNode = localSelfMonitorRef.current.gainNode;
+    if (gainNode) {
+      gainNode.gain.value = enabled ? 0.4 : 0;
+      console.log('[audio] self-monitor:', enabled ? 'on' : 'off');
+    }
+    if (localReverbElRef.current) {
+      localReverbElRef.current.muted = !enabled;
     }
   }, []);
 
@@ -111,6 +135,7 @@ export function useWebRTC(socketRef, localStreamRef) {
       if (ctx.state === 'suspended') {
         try { await ctx.resume(); } catch(e) {}
       }
+      console.log('[audio] AudioContext created, state:', ctx.state);
     }
 
     const peer = new RTCPeerConnection({
@@ -122,47 +147,22 @@ export function useWebRTC(socketRef, localStreamRef) {
     });
     peerRef.current = peer;
 
-    localStreamRef.current.getTracks().forEach((track) => {
+    localStreamRef.current.getTracks().forEach(track => {
       peer.addTrack(track, localStreamRef.current);
     });
 
     peer.ontrack = async (event) => {
-      console.log('[webrtc] ontrack fired, streams:', event.streams.length);
+      console.log('[webrtc] ontrack fired');
       const remoteStream = event.streams[0];
       if (remoteStream) await setupAudioPipeline(remoteStream);
     };
 
     peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        socketRef.current?.emit('rtc-ice', { candidate: event.candidate });
-      }
+      if (event.candidate) socketRef.current?.emit('rtc-ice', { candidate: event.candidate });
     };
 
-    peer.oniceconnectionstatechange = () => {
-      console.log('[webrtc] ICE state:', peer.iceConnectionState);
-    };
-
-    peer.onconnectionstatechange = () => {
-      console.log('[webrtc] connection state:', peer.connectionState);
-    };
-
-    // Self-monitoring: hear your own voice through the cathedral reverb.
-    // Created here so it starts exactly when the portal opens.
-    // Muted by default on speakers to avoid feedback — only audible with headphones.
-    const localAudioEl = document.createElement('audio');
-    localAudioEl.srcObject = localStreamRef.current;
-    localAudioEl.autoplay = true;
-    localAudioEl.playsInline = true;
-    localAudioEl.muted = false;
-    localAudioEl.volume = 0.4;
-    localAudioEl.style.position = 'absolute';
-    localAudioEl.style.width = '0';
-    localAudioEl.style.height = '0';
-    localAudioEl.style.opacity = '0';
-    document.body.appendChild(localAudioEl);
-    localAudioElementRef.current = localAudioEl;
-    localAudioEl.play().catch((e) => console.warn('[audio] local play() failed:', e));
-    console.log('[audio] self-monitoring started');
+    peer.oniceconnectionstatechange = () => console.log('[webrtc] ICE state:', peer.iceConnectionState);
+    peer.onconnectionstatechange = () => console.log('[webrtc] connection state:', peer.connectionState);
 
     if (isInitiator) {
       const offer = await peer.createOffer();
@@ -172,14 +172,11 @@ export function useWebRTC(socketRef, localStreamRef) {
   }, [setupAudioPipeline, socketRef, localStreamRef]);
 
   const handleOffer = useCallback(async ({ offer }) => {
-    console.log('[webrtc] handleOffer');
     const peer = peerRef.current;
     if (!peer) return;
     await peer.setRemoteDescription(new RTCSessionDescription(offer));
     remoteDescSet.current = true;
-    for (const c of iceCandidateQueue.current) {
-      await peer.addIceCandidate(new RTCIceCandidate(c));
-    }
+    for (const c of iceCandidateQueue.current) await peer.addIceCandidate(new RTCIceCandidate(c));
     iceCandidateQueue.current = [];
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
@@ -187,64 +184,39 @@ export function useWebRTC(socketRef, localStreamRef) {
   }, [socketRef]);
 
   const handleAnswer = useCallback(async ({ answer }) => {
-    console.log('[webrtc] handleAnswer');
     const peer = peerRef.current;
     if (!peer) return;
     await peer.setRemoteDescription(new RTCSessionDescription(answer));
     remoteDescSet.current = true;
-    for (const c of iceCandidateQueue.current) {
-      await peer.addIceCandidate(new RTCIceCandidate(c));
-    }
+    for (const c of iceCandidateQueue.current) await peer.addIceCandidate(new RTCIceCandidate(c));
     iceCandidateQueue.current = [];
   }, []);
 
   const handleIce = useCallback(async ({ candidate }) => {
     const peer = peerRef.current;
     if (!peer || !candidate) return;
-    if (!remoteDescSet.current) {
-      iceCandidateQueue.current.push(candidate);
-      return;
-    }
-    try {
-      await peer.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (e) {
-      console.error('[webrtc] ICE error:', e);
-    }
+    if (!remoteDescSet.current) { iceCandidateQueue.current.push(candidate); return; }
+    try { await peer.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch (e) { console.error('[webrtc] ICE error:', e); }
   }, []);
 
   const stopCall = useCallback(() => {
     console.log('[webrtc] stopCall');
-    // Remove audio elements from DOM
-    if (audioElementRef.current) {
-      audioElementRef.current.srcObject = null;
-      audioElementRef.current.remove();
-      audioElementRef.current = null;
-    }
-    if (localAudioElementRef.current) {
-      localAudioElementRef.current.srcObject = null;
-      localAudioElementRef.current.remove();
-      localAudioElementRef.current = null;
-    }
-    // Remove any reverb elements
-    document.querySelectorAll('audio').forEach(el => {
-      el.srcObject = null;
-      el.remove();
+    [remoteAudioElRef, remoteReverbElRef, localReverbElRef].forEach(ref => {
+      if (ref.current) { ref.current.srcObject = null; ref.current.remove(); ref.current = null; }
     });
+    document.querySelectorAll('audio').forEach(el => { el.srcObject = null; el.remove(); });
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current.getTracks().forEach(t => t.stop());
       localStreamRef.current = null;
     }
-    if (peerRef.current) {
-      peerRef.current.close();
-      peerRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
+    if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
+    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    convolverRef.current = null;
+    localSelfMonitorRef.current = { enabled: true, gainNode: null };
     iceCandidateQueue.current = [];
     remoteDescSet.current = false;
   }, [localStreamRef]);
 
-  return { startCall, stopCall, handleOffer, handleAnswer, handleIce };
+  return { startCall, stopCall, handleOffer, handleAnswer, handleIce, setSelfMonitor };
 }
