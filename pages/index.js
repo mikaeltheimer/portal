@@ -127,7 +127,7 @@ function Home() {
         if (partnerHolding && !iHolding) return "L'autre tend la main.";
         return "Quelqu'un est là. Posez et maintenez votre doigt sur le cercle — et espérez que l'autre en fasse autant.";
       case STATE.PORTAL_OPEN:
-        return "Le portail est ouvert. Levez votre doigt, et ce moment disparaîtra à jamais.";
+        return "L'interstice est ouvert. Levez votre doigt, et ce moment disparaîtra à jamais.";
       default:
         return null;
     }
@@ -139,7 +139,7 @@ function Home() {
   return (
     <>
       <Head>
-        <title>Portail</title>
+        <title>Interstice</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
         <meta name="theme-color" content="#0a0a0f" />
       </Head>
@@ -149,7 +149,7 @@ function Home() {
         {/* INTRO */}
         {state === STATE.INTRO && (
           <div className="intro">
-            <h1 className="title">Portail</h1>
+            <h1 className="title">Interstice</h1>
             <p className="subtitle">
               Une rencontre éphémère.<br />
               Deux présences. Un geste commun.
@@ -199,7 +199,7 @@ function Home() {
                 onTouchEnd={handleHoldEnd}
                 onTouchCancel={handleHoldEnd}
                 disabled={state === STATE.WAITING_ALONE}
-                aria-label="Portail"
+                aria-label="Interstice"
               >
                 <div className="btn-inner" />
               </button>
@@ -221,7 +221,7 @@ function Home() {
         {/* ENDED */}
         {state === STATE.ENDED && (
           <div className="ended">
-            <p className="ended-text">Le portail s'est fermé.</p>
+            <p className="ended-text">L'interstice s'est refermé.</p>
             <p className="ended-sub">Ce moment a existé.</p>
             <button className="enter-btn" onClick={handleNewRoom}>
               Entrer dans une nouvelle salle

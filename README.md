@@ -1,4 +1,4 @@
-# Portail
+# Interstice
 
 Une expérience de connexion éphémère entre deux inconnus.
 

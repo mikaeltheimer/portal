@@ -139,6 +139,6 @@ app.prepare().then(() => {
 
   const PORT = process.env.PORT || 3000;
   httpServer.listen(PORT, () => {
-    console.log(`> Portail ready on http://localhost:${PORT}`);
+    console.log(`> Interstice ready on http://localhost:${PORT}`);
   });
 });
