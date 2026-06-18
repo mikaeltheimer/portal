@@ -7,9 +7,12 @@ const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-// Room state
 const rooms = new Map();
-// roomId -> { users: [socketId, socketId], holding: Set<socketId>, connected: bool }
+const MAX_ROOMS = 500;
+
+// Persistent counter stored in memory (resets on server restart)
+// For persistence across restarts, use a file or DB — but memory is fine for now
+let totalConnections = 0;
 
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8);
@@ -17,7 +20,7 @@ function generateRoomId() {
 
 function findWaitingRoom() {
   for (const [roomId, room] of rooms.entries()) {
-    if (room.users.length === 1 && !room.connected) {
+    if (room.users.length === 1 && !room.connected && !room.destroyed) {
       return roomId;
     }
   }
@@ -26,40 +29,47 @@ function findWaitingRoom() {
 
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
+    // Expose total connections count via API
     const parsedUrl = parse(req.url, true);
+    if (parsedUrl.pathname === '/api/stats') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ totalConnections }));
+      return;
+    }
     handle(req, res, parsedUrl);
   });
 
-  const io = new Server(httpServer, {
-    cors: { origin: '*' }
-  });
+  const io = new Server(httpServer, { cors: { origin: '*' } });
 
   io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
     let currentRoom = null;
 
-    // User enters — find or create a room
     socket.on('enter', () => {
+      // Check capacity
+      if (rooms.size >= MAX_ROOMS) {
+        socket.emit('room-full');
+        return;
+      }
+
+      // Always join an existing waiting room if one exists — prevents
+      // two solo rooms from existing simultaneously
       const waitingRoomId = findWaitingRoom();
 
       if (waitingRoomId) {
-        // Join existing waiting room
         currentRoom = waitingRoomId;
         const room = rooms.get(waitingRoomId);
         room.users.push(socket.id);
         socket.join(waitingRoomId);
-
-        // Notify both users that a partner has arrived
         io.to(waitingRoomId).emit('partner-arrived');
         console.log(`Room ${waitingRoomId}: two users present`);
       } else {
-        // Create new room, wait alone
         currentRoom = generateRoomId();
         rooms.set(currentRoom, {
           users: [socket.id],
           holding: new Set(),
           connected: false,
-          destroyed: false
+          destroyed: false,
+          openedAt: null,
         });
         socket.join(currentRoom);
         socket.emit('waiting-alone', { roomId: currentRoom });
@@ -67,71 +77,52 @@ app.prepare().then(() => {
       }
     });
 
-    // User presses and holds the button
     socket.on('hold-start', () => {
       if (!currentRoom) return;
       const room = rooms.get(currentRoom);
       if (!room || room.destroyed) return;
 
       room.holding.add(socket.id);
-
-      // Notify partner that this user is holding
       socket.to(currentRoom).emit('partner-holding', true);
 
-      // If both users are holding, open the portal
       if (room.holding.size === 2 && !room.connected) {
         room.connected = true;
+        room.openedAt = Date.now();
+        totalConnections++;
         io.to(currentRoom).emit('portal-open');
-        console.log(`Room ${currentRoom}: portal opened`);
+        io.to(currentRoom).emit('stats-update', { totalConnections });
+        console.log(`Room ${currentRoom}: portal opened (total: ${totalConnections})`);
       }
     });
 
-    // User releases the button
     socket.on('hold-end', () => {
       if (!currentRoom) return;
       const room = rooms.get(currentRoom);
       if (!room || room.destroyed) return;
 
       room.holding.delete(socket.id);
-
-      // Notify partner
       socket.to(currentRoom).emit('partner-holding', false);
 
-      // If portal was open, destroy the room
       if (room.connected) {
+        const duration = room.openedAt ? Math.floor((Date.now() - room.openedAt) / 1000) : 0;
         room.destroyed = true;
-        io.to(currentRoom).emit('portal-closed');
+        io.to(currentRoom).emit('portal-closed', { duration });
         rooms.delete(currentRoom);
-        console.log(`Room ${currentRoom}: destroyed`);
+        console.log(`Room ${currentRoom}: destroyed after ${duration}s`);
       }
     });
 
     // WebRTC signaling
-    socket.on('rtc-offer', ({ offer }) => {
-      if (!currentRoom) return;
-      socket.to(currentRoom).emit('rtc-offer', { offer });
-    });
+    socket.on('rtc-offer', ({ offer }) => { if (currentRoom) socket.to(currentRoom).emit('rtc-offer', { offer }); });
+    socket.on('rtc-answer', ({ answer }) => { if (currentRoom) socket.to(currentRoom).emit('rtc-answer', { answer }); });
+    socket.on('rtc-ice', ({ candidate }) => { if (currentRoom) socket.to(currentRoom).emit('rtc-ice', { candidate }); });
 
-    socket.on('rtc-answer', ({ answer }) => {
-      if (!currentRoom) return;
-      socket.to(currentRoom).emit('rtc-answer', { answer });
-    });
-
-    socket.on('rtc-ice', ({ candidate }) => {
-      if (!currentRoom) return;
-      socket.to(currentRoom).emit('rtc-ice', { candidate });
-    });
-
-    // User disconnects
     socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id);
       if (!currentRoom) return;
-
       const room = rooms.get(currentRoom);
       if (!room) return;
-
-      // Notify partner and destroy room
-      socket.to(currentRoom).emit('portal-closed');
+      const duration = room.openedAt ? Math.floor((Date.now() - room.openedAt) / 1000) : 0;
+      socket.to(currentRoom).emit('portal-closed', { duration });
       rooms.delete(currentRoom);
       console.log(`Room ${currentRoom}: destroyed on disconnect`);
     });
