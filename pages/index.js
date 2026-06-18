@@ -4,12 +4,68 @@ import Head from 'next/head';
 import { io } from 'socket.io-client';
 import { useWebRTC } from '../hooks/useWebRTC';
 
-// Detect in-app browsers (Facebook, Instagram, etc.) that block mic access
 function isRestrictedWebView() {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
   return /FBAN|FBAV|Instagram|Messenger|LinkedInApp|Twitter|Snapchat|TikTok|MicroMessenger/.test(ua);
 }
+
+function getBrowserLang() {
+  if (typeof navigator === 'undefined') return 'fr';
+  const lang = navigator.language || navigator.languages?.[0] || 'fr';
+  return lang.toLowerCase().startsWith('fr') ? 'fr' : 'en';
+}
+
+const COPY = {
+  fr: {
+    title: 'Interstice',
+    subtitle: 'Une rencontre éphémère.\nDeux présences. Un geste commun.',
+    instructionMic: 'Mettez vos écouteurs, puis autorisez le microphone.',
+    btnMic: 'Autoriser le microphone',
+    micReady: 'Microphone prêt.',
+    btnEnter: 'Entrer',
+    micErrorHttps: 'HTTPS requis pour accéder au microphone.',
+    micErrorDenied: "L'accès au microphone a été refusé.",
+    alone: 'Cette salle attend une seconde présence.\nIl n\'y a rien à faire, sinon patienter.',
+    partnerHere: 'Quelqu\'un est là. Posez et maintenez\nvotre doigt sur le cercle — et espérez\nque l\'autre en fasse autant.',
+    waitingOther: "En attente de l'autre…",
+    otherReaching: "L'autre tend la main.",
+    connected: 'Le portail est ouvert.\nLevez votre doigt, et ce moment\ndisparaîtra à jamais.',
+    ended: "L'interstice s'est refermé.",
+    endedSub: 'Ce moment a existé.',
+    btnNewRoom: 'Entrer dans une nouvelle salle',
+    footer: 'Une expérience de Studio Existence',
+    webviewTitle: 'Interstice doit être ouvert\ndans votre navigateur.',
+    webviewSub: 'Cette expérience requiert l\'accès au microphone,\nqui n\'est pas disponible dans le navigateur\nintégré à cette application.',
+    webviewCopy: 'Copiez le lien ci-dessous et collez-le\ndans Safari ou Chrome.',
+    btnCopy: 'Copier le lien',
+    btnCopied: 'Lien copié',
+  },
+  en: {
+    title: 'Interstice',
+    subtitle: 'A fleeting encounter.\nTwo strangers. One shared moment.',
+    instructionMic: 'Wear headphones, then grant microphone access.',
+    btnMic: 'Allow microphone',
+    micReady: 'Microphone ready.',
+    btnEnter: 'Enter',
+    micErrorHttps: 'HTTPS is required to access the microphone.',
+    micErrorDenied: 'Microphone access was denied.',
+    alone: 'This room is waiting for another soul.\nNothing to do but wait.',
+    partnerHere: 'Someone has arrived. Press and hold\nthe circle — and trust that\nthe other will too.',
+    waitingOther: 'Waiting for the other…',
+    otherReaching: 'The other is reaching out.',
+    connected: 'The interstice is open.\nRelease your finger, and this moment\nwill be gone forever.',
+    ended: 'The interstice has closed.',
+    endedSub: 'This moment was real.',
+    btnNewRoom: 'Enter a new room',
+    footer: 'An experience by Studio Existence',
+    webviewTitle: 'Interstice must be opened\nin your browser.',
+    webviewSub: 'This experience requires microphone access,\nwhich is not available in the built-in browser\nof this application.',
+    webviewCopy: 'Copy the link below and paste it\ninto Safari or Chrome.',
+    btnCopy: 'Copy link',
+    btnCopied: 'Link copied',
+  },
+};
 
 const STATE = {
   INTRO: 'intro',
@@ -25,15 +81,20 @@ function Home() {
   const [iHolding, setIHolding] = useState(false);
   const [micError, setMicError] = useState(false);
   const [micGranted, setMicGranted] = useState(false);
-  const [isWebView] = useState(() => typeof window !== 'undefined' && isRestrictedWebView());
-  const [selfMonitor, setSelfMonitorState] = useState(true);
+  const [lang, setLang] = useState('fr');
+  const [copied, setCopied] = useState(false);
+  const [webView] = useState(() => typeof window !== 'undefined' && isRestrictedWebView());
 
   const socketRef = useRef(null);
   const holdingRef = useRef(false);
   const isInitiatorRef = useRef(false);
   const localStreamRef = useRef(null);
 
-  const { startCall, stopCall, handleOffer, handleAnswer, handleIce, setSelfMonitor } = useWebRTC(socketRef, localStreamRef);
+  const { startCall, stopCall, handleOffer, handleAnswer, handleIce } = useWebRTC(socketRef, localStreamRef);
+
+  useEffect(() => {
+    setLang(getBrowserLang());
+  }, []);
 
   useEffect(() => {
     const socket = io();
@@ -48,7 +109,6 @@ function Home() {
     });
 
     socket.on('partner-arrived', () => setState(STATE.PARTNER_HERE));
-
     socket.on('partner-holding', holding => setPartnerHolding(holding));
 
     socket.on('portal-open', async () => {
@@ -57,17 +117,15 @@ function Home() {
       catch (e) { console.error('[webrtc] startCall error:', e); setMicError(true); }
     });
 
-    socket.on('portal-closed', () => {
-      stopCall();
-      setState(STATE.ENDED);
-    });
-
+    socket.on('portal-closed', () => { stopCall(); setState(STATE.ENDED); });
     socket.on('rtc-offer', data => handleOffer(data));
     socket.on('rtc-answer', data => handleAnswer(data));
     socket.on('rtc-ice', handleIce);
 
     return () => { socket.disconnect(); stopCall(); };
   }, []);
+
+  const t = COPY[lang];
 
   const handleRequestMic = useCallback(() => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -88,7 +146,6 @@ function Home() {
     holdingRef.current = false;
     setIHolding(false);
     setPartnerHolding(false);
-    setSelfMonitorState(true);
     isInitiatorRef.current = false;
     setState(STATE.WAITING_ALONE);
     socketRef.current?.emit('enter');
@@ -112,37 +169,47 @@ function Home() {
     socketRef.current?.emit('hold-end');
   }, []);
 
-  const handleToggleSelfMonitor = useCallback(() => {
-    const next = !selfMonitor;
-    setSelfMonitorState(next);
-    setSelfMonitor(next);
-  }, [selfMonitor, setSelfMonitor]);
+  const handleCopyLink = useCallback(() => {
+    const url = window.location.href;
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }).catch(() => {
+      // Fallback for older browsers
+      const el = document.createElement('textarea');
+      el.value = url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    });
+  }, []);
 
   const getButtonState = () => {
     if (state === STATE.PORTAL_OPEN) return 'connected';
     if (iHolding) return 'holding';
     if (partnerHolding) return 'partner-holding';
     if (state === STATE.PARTNER_HERE) return 'ready';
-    return 'dormant'; // alone or waiting
+    return 'dormant';
   };
 
   const getMessage = () => {
     switch (state) {
-      case STATE.WAITING_ALONE:
-        return 'Cette salle attend une seconde présence. Il n\'y a rien à faire, sinon patienter.';
+      case STATE.WAITING_ALONE: return t.alone;
       case STATE.PARTNER_HERE:
-        if (iHolding && !partnerHolding) return "En attente de l'autre…";
-        if (partnerHolding && !iHolding) return "L'autre tend la main.";
-        return "Quelqu'un est là. Posez et maintenez votre doigt sur le cercle — et espérez que l'autre en fasse autant.";
-      case STATE.PORTAL_OPEN:
-        return "L'interstice est ouvert. Levez votre doigt, et ce moment disparaîtra à jamais.";
-      default:
-        return null;
+        if (iHolding && !partnerHolding) return t.waitingOther;
+        if (partnerHolding && !iHolding) return t.otherReaching;
+        return t.partnerHere;
+      case STATE.PORTAL_OPEN: return t.connected;
+      default: return null;
     }
   };
 
-  const btnState = getButtonState();
   const isConnected = state === STATE.PORTAL_OPEN;
+  const btnState = getButtonState();
+  const isDirective = state === STATE.PARTNER_HERE || state === STATE.PORTAL_OPEN;
 
   return (
     <>
@@ -154,55 +221,65 @@ function Home() {
 
       <div className={`room ${isConnected ? 'room-lit' : ''}`}>
 
+        {/* LANG TOGGLE — always visible except during active connection */}
+        {state !== STATE.PORTAL_OPEN && (
+          <div className="lang-toggle">
+            <button className={`lang-btn ${lang === 'fr' ? 'active' : ''}`} onClick={() => setLang('fr')}>FR</button>
+            <span className="lang-sep">·</span>
+            <button className={`lang-btn ${lang === 'en' ? 'active' : ''}`} onClick={() => setLang('en')}>EN</button>
+          </div>
+        )}
+
+        {/* WEBVIEW — Facebook / restricted browser */}
+        {webView && (
+          <div className="webview">
+            <h1 className="title">{t.title}</h1>
+            <p className="webview-title">{t.webviewTitle}</p>
+            <p className="webview-sub">{t.webviewSub}</p>
+            <p className="webview-copy">{t.webviewCopy}</p>
+            <div className="webview-url">{typeof window !== 'undefined' ? window.location.href : ''}</div>
+            <button className={`enter-btn ${copied ? 'copied' : ''}`} onClick={handleCopyLink}>
+              {copied ? t.btnCopied : t.btnCopy}
+            </button>
+          </div>
+        )}
+
         {/* INTRO */}
-        {state === STATE.INTRO && (
+        {!webView && state === STATE.INTRO && (
           <div className="intro">
-            <h1 className="title">Interstice</h1>
-            <p className="subtitle">
-              Une rencontre éphémère.<br />
-              Deux présences. Un geste commun.
-            </p>
+            <h1 className="title">{t.title}</h1>
+            <p className="subtitle">{t.subtitle.split('\n').map((line, i) => (
+              <span key={i}>{line}{i === 0 && <br />}</span>
+            ))}</p>
             {micError && (
               <p className="mic-error">
                 {typeof navigator !== 'undefined' && !navigator.mediaDevices
-                  ? 'HTTPS requis pour accéder au microphone.'
-                  : "L'accès au microphone a été refusé."}
+                  ? t.micErrorHttps : t.micErrorDenied}
               </p>
             )}
-            {isWebView ? (
-              <div className="webview-warning">
-                <p className="webview-text">
-                  Cette expérience requiert l'accès au microphone.<br />
-                  Ouvrez ce lien dans Safari ou Chrome pour continuer.
-                </p>
-                <button className="enter-btn" onClick={() => window.open(window.location.href, '_blank')}>
-                  Ouvrir dans le navigateur
-                </button>
-              </div>
-            ) : !micGranted ? (
+            {!micGranted ? (
               <>
-                <p className="instruction">Mettez vos écouteurs, puis autorisez le microphone.</p>
-                <button className="enter-btn" onClick={handleRequestMic}>
-                  Autoriser le microphone
-                </button>
+                <p className="instruction">{t.instructionMic}</p>
+                <button className="enter-btn" onClick={handleRequestMic}>{t.btnMic}</button>
               </>
             ) : (
               <>
-                <p className="instruction granted">Microphone prêt.</p>
-                <button className="enter-btn" onClick={handleEnter}>Entrer</button>
+                <p className="instruction granted">{t.micReady}</p>
+                <button className="enter-btn" onClick={handleEnter}>{t.btnEnter}</button>
               </>
             )}
           </div>
         )}
 
         {/* EXPERIENCE */}
-        {state !== STATE.INTRO && state !== STATE.ENDED && (
+        {!webView && state !== STATE.INTRO && state !== STATE.ENDED && (
           <div className="experience">
-
             <div className="message-zone">
               {getMessage() && (
-                <p className={`message ${state === STATE.PORTAL_OPEN ? 'message-lit' : ''}`}>
-                  {getMessage()}
+                <p className={`message ${isDirective ? 'message-directive' : ''} ${isConnected ? 'message-lit' : ''}`}>
+                  {getMessage().split('\n').map((line, i, arr) => (
+                    <span key={i}>{line}{i < arr.length - 1 && <br />}</span>
+                  ))}
                 </p>
               )}
             </div>
@@ -222,34 +299,25 @@ function Home() {
                 <div className="btn-inner" />
               </button>
             </div>
-
-            {(state === STATE.PARTNER_HERE || state === STATE.PORTAL_OPEN) && (
-              <div className="controls">
-                <button
-                  className={`toggle-btn ${selfMonitor ? 'on' : 'off'}`}
-                  onClick={handleToggleSelfMonitor}
-                >
-                  {selfMonitor ? 'Retour micro : activé' : 'Retour micro : désactivé'}
-                </button>
-              </div>
-            )}
           </div>
         )}
 
         {/* ENDED */}
-        {state === STATE.ENDED && (
+        {!webView && state === STATE.ENDED && (
           <div className="ended">
-            <p className="ended-text">L'interstice s'est refermé.</p>
-            <p className="ended-sub">Ce moment a existé.</p>
-            <button className="enter-btn" onClick={handleNewRoom}>
-              Entrer dans une nouvelle salle
-            </button>
+            <p className="ended-text">{t.ended}</p>
+            <p className="ended-sub">{t.endedSub}</p>
+            <button className="enter-btn" onClick={handleNewRoom}>{t.btnNewRoom}</button>
           </div>
         )}
+
+        {/* FOOTER */}
+        <div className="footer">
+          <a href="https://studioexistence.com" target="_blank" rel="noopener noreferrer">{t.footer}</a>
+        </div>
       </div>
 
       <style jsx>{`
-        /* ── ROOM ── */
         .room {
           width: 100%;
           height: 100%;
@@ -258,9 +326,114 @@ function Home() {
           justify-content: center;
           background: var(--room);
           transition: background 2s ease;
+          position: relative;
         }
-        .room-lit {
-          background: #0d1a24;
+        .room-lit { background: #0d1a24; }
+
+        /* ── LANG TOGGLE ── */
+        .lang-toggle {
+          position: absolute;
+          top: 1.5rem;
+          right: 1.5rem;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          z-index: 10;
+        }
+        .lang-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          font-family: 'Cormorant Garamond', serif;
+          font-style: italic;
+          font-size: 0.85rem;
+          letter-spacing: 0.12em;
+          color: var(--text-dim);
+          padding: 0;
+          transition: color 0.3s;
+          opacity: 0.5;
+        }
+        .lang-btn.active { opacity: 1; color: var(--text); }
+        .lang-btn:hover { opacity: 1; color: var(--gold); }
+        .lang-sep {
+          font-family: 'Cormorant Garamond', serif;
+          color: var(--text-dim);
+          font-size: 0.85rem;
+          opacity: 0.3;
+        }
+
+        /* ── FOOTER ── */
+        .footer {
+          position: absolute;
+          bottom: 1.5rem;
+          left: 50%;
+          transform: translateX(-50%);
+          white-space: nowrap;
+        }
+        .footer a {
+          font-family: 'Cormorant Garamond', serif;
+          font-style: italic;
+          font-size: 0.75rem;
+          letter-spacing: 0.1em;
+          color: var(--text-dim);
+          text-decoration: none;
+          opacity: 0.4;
+          transition: opacity 0.3s;
+        }
+        .footer a:hover { opacity: 0.8; }
+
+        /* ── WEBVIEW ── */
+        .webview {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 1.5rem;
+          text-align: center;
+          padding: 2.5rem 2rem;
+          max-width: 400px;
+          animation: fadeIn 1.2s ease;
+        }
+        .webview-title {
+          font-family: 'Cormorant Garamond', serif;
+          font-size: clamp(1.1rem, 3.5vw, 1.4rem);
+          font-weight: 300;
+          color: var(--text);
+          line-height: 1.6;
+          letter-spacing: 0.05em;
+          white-space: pre-line;
+        }
+        .webview-sub {
+          font-family: 'Cormorant Garamond', serif;
+          font-style: italic;
+          font-size: clamp(0.85rem, 2.5vw, 1rem);
+          color: var(--text-dim);
+          line-height: 1.75;
+          letter-spacing: 0.04em;
+          white-space: pre-line;
+        }
+        .webview-copy {
+          font-size: 0.75rem;
+          letter-spacing: 0.1em;
+          color: var(--gold-dim);
+          text-transform: uppercase;
+          white-space: pre-line;
+          line-height: 1.8;
+        }
+        .webview-url {
+          font-family: 'Inter', sans-serif;
+          font-size: 0.75rem;
+          color: var(--text-dim);
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.08);
+          padding: 0.6rem 1rem;
+          border-radius: 2px;
+          letter-spacing: 0.02em;
+          word-break: break-all;
+          max-width: 300px;
+        }
+        .enter-btn.copied {
+          border-color: var(--cathedral-dim);
+          color: var(--cathedral);
         }
 
         /* ── INTRO ── */
@@ -298,24 +471,6 @@ function Home() {
         .instruction.granted { color: var(--cathedral-dim); }
         .mic-error { font-size: 0.8rem; color: #8a4a4a; letter-spacing: 0.08em; }
 
-        .webview-warning {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 1.5rem;
-          max-width: 320px;
-        }
-
-        .webview-text {
-          font-family: 'Cormorant Garamond', serif;
-          font-style: italic;
-          font-size: clamp(0.95rem, 2.5vw, 1.1rem);
-          color: var(--text-dim);
-          line-height: 1.8;
-          letter-spacing: 0.04em;
-          text-align: center;
-        }
-
         .enter-btn {
           background: none;
           border: 1px solid var(--waiting);
@@ -342,17 +497,18 @@ function Home() {
           position: relative;
         }
 
-        /* ── MESSAGE ── */
         .message-zone {
-          min-height: 5rem;
+          min-height: 6rem;
           display: flex;
           align-items: center;
           justify-content: center;
           margin-bottom: 3rem;
           padding: 0 2rem;
-          max-width: 480px;
+          max-width: 500px;
           width: 100%;
         }
+
+        /* Default message — subtle */
         .message {
           font-family: 'Cormorant Garamond', serif;
           font-size: clamp(1rem, 2.5vw, 1.15rem);
@@ -362,10 +518,22 @@ function Home() {
           line-height: 1.75;
           animation: fadeIn 0.8s ease;
           text-align: center;
-          transition: color 1.5s ease;
+          transition: color 1.5s ease, font-size 0.4s ease;
         }
-        .message-lit {
+
+        /* Directive message — impossible to miss */
+        .message.message-directive {
+          font-size: clamp(1.15rem, 3.5vw, 1.45rem);
+          color: var(--text);
+          font-style: normal;
+          font-weight: 300;
+          letter-spacing: 0.06em;
+          line-height: 1.8;
+        }
+
+        .message.message-lit {
           color: #c8dde8;
+          font-style: italic;
         }
 
         /* ── BUTTON ── */
@@ -396,85 +564,53 @@ function Home() {
           transition: background 1.2s ease, box-shadow 1.2s ease;
         }
 
-        /* DORMANT — alone, disabled but present */
         .portal-btn.dormant .btn-inner {
           background: #12122a;
-          box-shadow:
-            0 0 0 1px #1e1e3a,
-            inset 0 0 30px 0 rgba(100, 90, 160, 0.06);
+          box-shadow: 0 0 0 1px #1e1e3a, inset 0 0 30px 0 rgba(100,90,160,0.06);
         }
 
-        /* READY — partner present, inviting */
         .portal-btn.ready .btn-inner {
           background: #1a1a30;
           box-shadow:
             0 0 0 1px var(--gold-dim),
-            0 0 50px 0 rgba(201, 185, 154, 0.1),
-            inset 0 0 40px 0 rgba(201, 185, 154, 0.05);
+            0 0 50px 0 rgba(201,185,154,0.1),
+            inset 0 0 40px 0 rgba(201,185,154,0.05);
           animation: breathe-gold 2.5s ease-in-out infinite;
         }
 
-        /* PARTNER HOLDING */
         .portal-btn.partner-holding .btn-inner {
-          background: rgba(201, 185, 154, 0.08);
+          background: rgba(201,185,154,0.08);
           box-shadow:
             0 0 0 1px var(--gold),
-            0 0 80px 0 rgba(201, 185, 154, 0.18),
-            inset 0 0 50px 0 rgba(201, 185, 154, 0.08);
+            0 0 80px 0 rgba(201,185,154,0.18),
+            inset 0 0 50px 0 rgba(201,185,154,0.08);
           animation: none;
         }
 
-        /* HOLDING */
         .portal-btn.holding .btn-inner {
-          background: rgba(201, 185, 154, 0.12);
+          background: rgba(201,185,154,0.12);
           box-shadow:
             0 0 0 1px var(--gold),
-            0 0 100px 0 rgba(201, 185, 154, 0.22),
-            inset 0 0 60px 0 rgba(201, 185, 154, 0.1);
+            0 0 100px 0 rgba(201,185,154,0.22),
+            inset 0 0 60px 0 rgba(201,185,154,0.1);
           animation: none;
         }
 
-        /* CONNECTED — luminous portal */
         .portal-btn.connected .btn-inner {
           background: radial-gradient(circle at center,
-            rgba(220, 240, 255, 0.95) 0%,
-            rgba(160, 210, 240, 0.7) 35%,
-            rgba(80, 160, 200, 0.3) 65%,
+            rgba(220,240,255,0.95) 0%,
+            rgba(160,210,240,0.7) 35%,
+            rgba(80,160,200,0.3) 65%,
             transparent 100%
           );
           box-shadow:
-            0 0 0 1px rgba(180, 220, 240, 0.6),
-            0 0 60px 20px rgba(126, 184, 201, 0.35),
-            0 0 120px 40px rgba(126, 184, 201, 0.2),
-            0 0 200px 80px rgba(126, 184, 201, 0.08),
-            inset 0 0 60px 0 rgba(220, 240, 255, 0.15);
+            0 0 0 1px rgba(180,220,240,0.6),
+            0 0 60px 20px rgba(126,184,201,0.35),
+            0 0 120px 40px rgba(126,184,201,0.2),
+            0 0 200px 80px rgba(126,184,201,0.08),
+            inset 0 0 60px 0 rgba(220,240,255,0.15);
           animation: portal-pulse 3s ease-in-out infinite;
         }
-
-        /* ── CONTROLS ── */
-        .controls {
-          position: absolute;
-          bottom: 2.5rem;
-          left: 50%;
-          transform: translateX(-50%);
-          animation: fadeIn 1s ease;
-        }
-        .toggle-btn {
-          background: none;
-          border: none;
-          cursor: pointer;
-          font-family: 'Inter', sans-serif;
-          font-size: 0.7rem;
-          font-weight: 300;
-          letter-spacing: 0.15em;
-          text-transform: uppercase;
-          padding: 0.4rem 0;
-          transition: color 0.3s;
-          white-space: nowrap;
-        }
-        .toggle-btn.on  { color: rgba(200, 221, 232, 0.4); }
-        .toggle-btn.off { color: var(--waiting); }
-        .toggle-btn:hover { color: var(--gold); }
 
         /* ── ENDED ── */
         .ended {
