@@ -43,6 +43,7 @@ export function useWebRTC(socketRef, localStreamRef) {
   const selfMonitorPrefRef = useRef(true);
   const iceCandidateQueue = useRef([]);
   const remoteDescSet = useRef(false);
+  const iceServersCache = useRef(null);
 
   const setupAudioPipeline = useCallback(async (remoteStream) => {
     console.log('[audio] setting up pipeline');
@@ -123,6 +124,20 @@ export function useWebRTC(socketRef, localStreamRef) {
     }
   }, []);
 
+  // Call this when partner arrives — preloads ICE servers so startCall has no fetch delay
+  const prefetchIceServers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/turn');
+      const data = await res.json();
+      if (data.iceServers) {
+        iceServersCache.current = data.iceServers;
+        console.log('[webrtc] ICE servers prefetched:', data.iceServers.length);
+      }
+    } catch (e) {
+      console.warn('[webrtc] ICE prefetch failed:', e);
+    }
+  }, []);
+
   const startCall = useCallback(async (isInitiator) => {
     console.log('[webrtc] startCall, isInitiator:', isInitiator);
     iceCandidateQueue.current = [];
@@ -143,21 +158,25 @@ export function useWebRTC(socketRef, localStreamRef) {
       console.log('[audio] AudioContext created, state:', ctx.state);
     }
 
-    // Fetch ICE servers (includes TURN credentials from server)
-    let iceServers = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ];
-    try {
-      const res = await fetch('/api/turn');
-      const data = await res.json();
-      if (data.iceServers) {
-        iceServers = data.iceServers;
-        console.log('[webrtc] TURN servers loaded:', iceServers.length);
+    // Use prefetched ICE servers if available, otherwise fetch now
+    let iceServers = iceServersCache.current;
+    if (!iceServers) {
+      console.log('[webrtc] ICE servers not prefetched, fetching now...');
+      try {
+        const res = await fetch('/api/turn');
+        const data = await res.json();
+        iceServers = data.iceServers || null;
+      } catch (e) {
+        console.warn('[webrtc] Failed to fetch TURN config, using STUN only:', e);
       }
-    } catch (e) {
-      console.warn('[webrtc] Failed to fetch TURN config, using STUN only:', e);
     }
+    if (!iceServers) {
+      iceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ];
+    }
+    console.log('[webrtc] using ICE servers:', iceServers.length);
 
     const peer = new RTCPeerConnection({ iceServers });
     peerRef.current = peer;
@@ -233,5 +252,5 @@ export function useWebRTC(socketRef, localStreamRef) {
     remoteDescSet.current = false;
   }, [localStreamRef]);
 
-  return { startCall, stopCall, handleOffer, handleAnswer, handleIce, setSelfMonitor };
+  return { prefetchIceServers, startCall, stopCall, handleOffer, handleAnswer, handleIce, setSelfMonitor };
 }

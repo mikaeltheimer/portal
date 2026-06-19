@@ -121,7 +121,7 @@ function Home() {
   const isInitiatorRef = useRef(false);
   const localStreamRef = useRef(null);
 
-  const { startCall, stopCall, handleOffer, handleAnswer, handleIce } = useWebRTC(socketRef, localStreamRef);
+  const { prefetchIceServers, startCall, stopCall, handleOffer, handleAnswer, handleIce } = useWebRTC(socketRef, localStreamRef);
 
   useEffect(() => { setLang(getBrowserLang()); }, []);
 
@@ -145,7 +145,10 @@ function Home() {
       isInitiatorRef.current = true;
     });
 
-    socket.on('partner-arrived', () => setState(STATE.PARTNER_HERE));
+    socket.on('partner-arrived', () => {
+      setState(STATE.PARTNER_HERE);
+      prefetchIceServers();
+    });
     socket.on('partner-holding', holding => setPartnerHolding(holding));
     socket.on('room-full', () => setState(STATE.FULL));
 
