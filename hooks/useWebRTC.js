@@ -185,18 +185,32 @@ export function useWebRTC(socketRef, localStreamRef) {
       peer.addTrack(track, localStreamRef.current);
     });
 
-    peer.ontrack = async (event) => {
-      console.log('[webrtc] ontrack fired');
-      const remoteStream = event.streams[0];
-      if (remoteStream) await setupAudioPipeline(remoteStream);
+    // Store remote stream when track arrives, play only after ICE connected
+    let pendingRemoteStream = null;
+
+    peer.ontrack = (event) => {
+      console.log('[webrtc] ontrack fired, ICE state:', peer.iceConnectionState);
+      pendingRemoteStream = event.streams[0];
+      if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+        if (pendingRemoteStream) setupAudioPipeline(pendingRemoteStream);
+      }
     };
 
     peer.onicecandidate = (event) => {
       if (event.candidate) socketRef.current?.emit('rtc-ice', { candidate: event.candidate });
     };
 
-    peer.oniceconnectionstatechange = () => console.log('[webrtc] ICE state:', peer.iceConnectionState);
-    peer.onconnectionstatechange = () => console.log('[webrtc] connection state:', peer.connectionState);
+    peer.oniceconnectionstatechange = () => {
+      console.log('[webrtc] ICE state:', peer.iceConnectionState);
+      if ((peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') && pendingRemoteStream) {
+        setupAudioPipeline(pendingRemoteStream);
+        pendingRemoteStream = null;
+      }
+    };
+
+    peer.onconnectionstatechange = () => {
+      console.log('[webrtc] connection state:', peer.connectionState);
+    };
 
     if (isInitiator) {
       const offer = await peer.createOffer();

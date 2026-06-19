@@ -125,7 +125,9 @@ app.prepare().then(() => {
         room.destroyed = true;
         io.to(currentRoom).emit('portal-closed', { duration });
         rooms.delete(currentRoom);
-        console.log(`Room ${currentRoom}: destroyed after ${duration}s`);
+        console.log(`Room ${currentRoom}: destroyed after ${duration}s (hold-end, ICE was ${room.iceState || 'unknown'})`);
+      } else {
+        console.log(`Room ${currentRoom}: hold-end while not connected, holding size: ${room.holding.size}`);
       }
     });
 
@@ -134,14 +136,14 @@ app.prepare().then(() => {
     socket.on('rtc-answer', ({ answer }) => { if (currentRoom) socket.to(currentRoom).emit('rtc-answer', { answer }); });
     socket.on('rtc-ice', ({ candidate }) => { if (currentRoom) socket.to(currentRoom).emit('rtc-ice', { candidate }); });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       if (!currentRoom) return;
       const room = rooms.get(currentRoom);
       if (!room) return;
       const duration = room.openedAt ? Math.floor((Date.now() - room.openedAt) / 1000) : 0;
       socket.to(currentRoom).emit('portal-closed', { duration });
       rooms.delete(currentRoom);
-      console.log(`Room ${currentRoom}: destroyed on disconnect`);
+      console.log(`Room ${currentRoom}: destroyed on disconnect, reason: ${reason}, connected: ${room.connected}`);
     });
   });
 
