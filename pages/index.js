@@ -42,10 +42,12 @@ const COPY = {
     micErrorHttps: 'HTTPS requis pour accéder au microphone.',
     micErrorDenied: "L'accès au microphone a été refusé.",
     alone: 'Cette salle attend une seconde présence.\nIl n\'y a rien à faire, sinon patienter.',
-    partnerHere: 'Quelqu\'un est là. Posez et maintenez\nvotre doigt sur le cercle — et espérez\nque l\'autre en fasse autant.',
-    waitingOther: "En attente de l'autre…",
-    otherReaching: "L'autre tend la main.",
-    connected: 'Le portail est ouvert.\nLevez votre doigt, et ce moment\ndisparaîtra à jamais.',
+    partnerHere: (touch) => touch
+      ? "Quelqu'un est là.\n\nMaintenez votre doigt sur le cercle."
+      : "Quelqu'un est là.\n\nMaintenez votre clic sur le cercle.",
+    waitingOther: (touch) => touch ? "L'autre attend.\n\nMaintenez votre doigt sur le cercle." : "L'autre attend.\n\nMaintenez votre clic sur le cercle.",
+    otherReaching: (touch) => touch ? "L'autre attend.\n\nMaintenez votre doigt sur le cercle." : "L'autre attend.\n\nMaintenez votre clic sur le cercle.",
+    connected: (touch) => touch ? 'Levez le doigt, et ce moment disparaîtra à jamais.' : 'Relâchez, et ce moment disparaîtra à jamais.',
     ended: "L'interstice s'est refermé.",
     endedSub: 'Ce moment a existé.',
     endedDuration: (d, total) => `Il a duré ${d}. ${total !== null ? `${total} interstices se sont ouverts depuis le début.` : ''}`,
@@ -71,10 +73,12 @@ const COPY = {
     micErrorHttps: 'HTTPS is required to access the microphone.',
     micErrorDenied: 'Microphone access was denied.',
     alone: 'This room is waiting for another soul.\nNothing to do but wait.',
-    partnerHere: 'Someone has arrived. Press and hold\nthe circle — and trust that\nthe other will too.',
-    waitingOther: 'Waiting for the other…',
-    otherReaching: 'The other is reaching out.',
-    connected: 'The interstice is open.\nRelease your finger, and this moment\nwill be gone forever.',
+    partnerHere: (touch) => touch
+      ? "Someone is here.\n\nPress and hold the circle."
+      : "Someone is here.\n\nClick and hold the circle.",
+    waitingOther: (touch) => touch ? "The other is waiting.\n\nPress and hold the circle." : "The other is waiting.\n\nClick and hold the circle.",
+    otherReaching: (touch) => touch ? "The other is waiting.\n\nPress and hold the circle." : "The other is waiting.\n\nClick and hold the circle.",
+    connected: () => 'Release, and this moment will be gone forever.',
     ended: 'The interstice has closed.',
     endedSub: 'This moment was real.',
     endedDuration: (d, total) => `It lasted ${d}. ${total !== null ? `${total} interstices have opened since the beginning.` : ''}`,
@@ -110,6 +114,7 @@ function Home() {
   const [totalConnections, setTotalConnections] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(null);
   const [webView] = useState(() => typeof window !== 'undefined' && isRestrictedWebView());
+  const [isTouch] = useState(() => typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
 
   const socketRef = useRef(null);
   const holdingRef = useRef(false);
@@ -245,10 +250,10 @@ function Home() {
       case STATE.WAITING_ALONE: return t.alone;
       case STATE.FULL: return t.roomFull;
       case STATE.PARTNER_HERE:
-        if (iHolding && !partnerHolding) return t.waitingOther;
-        if (partnerHolding && !iHolding) return t.otherReaching;
-        return t.partnerHere;
-      case STATE.PORTAL_OPEN: return t.connected;
+        if (iHolding && !partnerHolding) return t.waitingOther(isTouch);
+        if (partnerHolding && !iHolding) return t.otherReaching(isTouch);
+        return t.partnerHere(isTouch);
+      case STATE.PORTAL_OPEN: return t.connected(isTouch);
       default: return null;
     }
   };
@@ -350,13 +355,23 @@ function Home() {
         {showExperience && (
           <div className="experience">
             <div className="message-zone">
-              {getMessage() && (
-                <p className={`message ${isDirective ? 'message-directive' : ''} ${isConnected ? 'message-lit' : ''}`}>
-                  {getMessage().split('\n').map((line, i, arr) => (
-                    <span key={i}>{line}{i < arr.length - 1 && <br />}</span>
-                  ))}
-                </p>
-              )}
+              {getMessage() && (() => {
+                const msg = getMessage();
+                const parts = msg.split('\n\n');
+                const hasTwoParts = parts.length === 2;
+                return hasTwoParts ? (
+                  <div className={`message-block ${isConnected ? 'message-lit' : ''}`}>
+                    <p className="msg-poetic">{parts[0]}</p>
+                    <p className="msg-directive">{parts[1]}</p>
+                  </div>
+                ) : (
+                  <p className={`message ${isDirective ? 'message-directive' : ''} ${isConnected ? 'message-lit' : ''}`}>
+                    {msg.split('\n').map((line, i, arr) => (
+                      <span key={i}>{line}{i < arr.length - 1 && <br />}</span>
+                    ))}
+                  </p>
+                );
+              })()}
             </div>
 
             <div className="button-zone">
@@ -597,6 +612,36 @@ function Home() {
           font-style: normal; font-weight: 300; letter-spacing: 0.06em; line-height: 1.8;
         }
         .message.message-lit { color: #c8dde8; font-style: italic; }
+
+        /* Two-part message: poetic line + directive line */
+        .message-block {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 1.2rem;
+          animation: fadeIn 0.8s ease;
+          text-align: center;
+        }
+        .message-block.message-lit .msg-poetic { color: #c8dde8; }
+
+        .msg-poetic {
+          font-family: 'Cormorant Garamond', serif;
+          font-style: italic;
+          font-size: clamp(1rem, 2.5vw, 1.1rem);
+          color: var(--text-dim);
+          letter-spacing: 0.05em;
+          line-height: 1.7;
+        }
+
+        .msg-directive {
+          font-family: 'Cormorant Garamond', serif;
+          font-size: clamp(1.25rem, 4vw, 1.6rem);
+          font-weight: 300;
+          font-style: normal;
+          color: var(--text);
+          letter-spacing: 0.06em;
+          line-height: 1.5;
+        }
 
         /* BUTTON */
         .button-zone { display: flex; align-items: center; justify-content: center; }
